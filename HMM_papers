@@ -1,0 +1,100 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Oct  5 23:29:30 2023
+
+@author: david
+"""
+
+
+##########################
+##### Library Import #####
+##########################
+import pandas as pd
+import numpy as np
+import warnings # Ignore Warnings
+from pykrx import stock
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+
+date = '20230927'
+
+ksp200 = stock.get_index_ohlcv("19800101", date, "1001") ## KOSPI
+
+data = ksp200['2005':]
+data.index = pd.to_datetime(data.index)
+data = pd.DataFrame({'prc':data.iloc[:,3]})
+data['rtn'] = np.log(data['prc']/data['prc'].shift(1))
+plt.plot(data.index, data['rtn'])
+
+data['vol'] = data['rtn'].rolling(10).std()
+data.dropna(inplace=True)
+
+# pip install hmmlearn
+from hmmlearn import hmm
+
+# Define the observation sequences (daily returns and volatilities)
+# Replace these with your actual data
+dates = data.index
+daily_prc = data['prc'].values
+daily_returns = data['rtn'].values
+volatilities  = data['vol'].values
+
+# Combine the observations into a single feature vector
+observations = np.column_stack((daily_returns, volatilities))
+
+# Define the number of hidden states
+num_states = 3
+
+# Create and train the Hidden Markov Model
+model = hmm.GaussianHMM(n_components=num_states, covariance_type="full", n_iter=50)
+
+# Fit the model to the observations
+model.fit(observations)
+
+# Predict the hidden states for the observations
+hidden_states = model.predict(observations)
+
+# Print the predicted hidden states
+print("Predicted Hidden States:")
+print(hidden_states)
+
+
+
+# Create a list of colors for each hidden state
+colors = ['coral', 'lightgreen', 'blue']
+
+# 주가 지수 그래프 그리기
+plt.figure(figsize=(12, 6))
+plt.plot(dates, daily_prc, label='Price Index', color='gray', lw=1,  linestyle='--')
+
+# Hidden States 별로 색상을 다르게 설정하여 표시
+for state, color in zip(range(num_states), colors):
+    state_indices = np.where(hidden_states == state)
+    state_dates = [dates[i] for i in state_indices[0]]
+    state_prices = [daily_prc[i] for i in state_indices[0]]
+    plt.scatter(state_dates, state_prices, c=color, label=f'State {state}', s=10)
+
+plt.xlabel('Date')
+plt.ylabel('Price Index')
+plt.title('Market Regime Classification with Hidden States')
+plt.legend()
+plt.grid()
+plt.show()
+
+
+'''
+이 논문은 주식 시장 규제를 분류하기 위해 가격(price)과 변동성(volatility) 두 변수를 사용하는 것에 중점을 두고 있습니다.
+
+3.1. 데이터 소스 및 처리
+투자 전략을 설정하는 첫 번째 단계는 다양한 시장 규제를 구별하고 데이터로 모델을 훈련시키는 파이프라인을 만드는 것입니다. 이 논문에서는 S&P500 ETF OHLC 역사적 데이터를 사용하여 모델을 훈련하기로 결정했습니다. S&P500을 규제 분류에 사용한 이유는 미국의 일반적인 경제 건강뿐만 아니라 주식 시장에 대한 투자자 신뢰 수준의 지표로 자주 간주되기 때문입니다. S&P500은 투자자가 현재 및 미래 시장 상황에 대해 얼마나 확신하는지를 넓은 수준에서 반영합니다. 투자자 심리는 서로 다른 섹터나 기업에 다르게 영향을 미칠 수 있지만, 자본 가중 지수를 사용하면 이러한 차이를 추상화하고 시장을 집단으로 연구하고 평가할 수 있습니다.
+
+특히 관찰 변수로 일일 수익률(daily return)과 변동성(volatility)을 사용하기로 결정했습니다. 이 두 변수는 OHLC(Open, High, Low, Close) 데이터에서 계산할 수 있습니다. 일일 수익률은 최근 종가에서 이전 날 종가를 뺀 다음 이전 날 종가로 나눈 차이를 계산합니다. 변동성은 10일 이동 평균의 일일 종가 가격의 평균 제곱 오차(MSE)로 계산합니다.
+
+이 관찰 변수를 사용하여 가격 움직임의 대략적인 시장 규제 분류를 캡처하려고 합니다. 그림 2에서와 같이 다양한 숨겨진 상태를 연속적인 관측 가능한 변수 집합으로 생성하는 이산 시장 규제로 분류하려고 시도합니다.
+
+이 연구에서는 Python의 `hmmlearn` 라이브러리를 기반으로 Gaussian Hidden Markov Model을 사용합니다. 모델에 대한 세 가지 주요 매개변수를 정의합니다. 이 매개변수는 숨겨진 상태의 수, 공분산 유형 및 최대 반복 횟수를 위한 임계값을 포함합니다. 모델의 매개변수를 결정하는 중요한 고려 사항은 편향-분산 균형입니다. 이 연구의 목적을 위해 우리는 투자 상태를 나타내는 세 가지 숨겨진 상태를 사용하기로 결정했습니다. 이는 상승, 하락 및 중립적인 시장 규제 기간을 나타냅니다. 숨겨진 상태의 수와 기대치 최대화의 임계값 모두 모델의 적합도에 영향을 미칠 수 있습니다. 이 연구에서는 두 개의 상태 모델에서 세 개의 상태 모델로 이동함으로써 로그 가능도의 개선을 최대화했습니다. 편향-분산 균형을 조절하기 위해 과적합을 방지하기 위해 세 개의 상태 모델로 결정했습니다. 또한 EM(iteration) 반복 횟수의 임계값을 75로 설정하여 모델이 평균 연속 규제 기간이 약 12.5일인 결과를 얻었습니다. 공분산 유형으로, 우리는 특성 벡터의 요소들이 서로 독립적이지 않다는 가정을 버리고 전체 공분산 행렬(full covariance matrix)을 사용하기로 결정했습니다. 전체 공분산 행렬은 매개변수 수를 증가시키는 대신 모델에서 특성 간의 상관 관계를 포함하는 장점이 있습니다.
+
+HMM에 의해 분류된 세 가지 숨겨진 상태에 따른 변동성과 일일 수익률의 평균을 살펴보면, 한 규제가 낮은 변동성과 높은 일일 수익률을 가지고 있고, 다른 하나는 여전히 양수의 일일 수익률을 가지고 있지만 높은 변동성을 가지며, 마지막 하나는 음수의 일일 수익률과 극도로 높은 변동성을 가지고 있음을 볼 수 있습니다. 중요한 고려 사항 중 하나는 규제별 리스크와 수익 사이의 균형이 적절하지 않다는 것입니다. 이는 HMM을 훈련시키기 위해 변동성과 수익을 모두 관찰값으로 사용했기 때문에 발생하는 문제로, HMM은 또한 변동성 행동을 기준으로 거래일을 분류하려고 시도합니다. 따라서 비지도 학습은 각각 다른 변동성/수익 패턴을 가진 세 가지 규제를 분류합니다. 이 연구에서는 규제 1
+'''
